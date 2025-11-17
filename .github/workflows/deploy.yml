@@ -1,0 +1,131 @@
+name: CI/CD Pipeline - Build, Test & Deploy
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  test-and-deploy:
+    name: Test, Build & Deploy to GitHub Pages
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    
+    steps:
+      # Step 1: Checkout Repository
+      - name: 📦 Checkout Repository
+        uses: actions/checkout@v4
+        
+      # Step 2: Setup Node.js LTS
+      - name: 🚀 Setup Node.js LTS
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+          cache: 'npm'
+          
+      # Step 3: Cache node_modules
+      - name: 📂 Cache Dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+            
+      # Step 4: Install Dependencies
+      - name: 📥 Install Dependencies
+        run: npm ci
+        
+      # Step 5: Auto-detect Angular project name from angular.json
+      - name: 🔍 Detect Project Configuration
+        id: project-config
+        run: |
+          # Extract project name from angular.json
+          PROJECT_NAME=$(node -e "const config = require('./angular.json'); const projectName = Object.keys(config.projects)[0]; console.log(projectName);")
+          echo "Angular Project Name: $PROJECT_NAME"
+          echo "project_name=$PROJECT_NAME" >> $GITHUB_OUTPUT
+          
+          # Determine output path
+          OUTPUT_PATH="dist/$PROJECT_NAME"
+          echo "Build Output Path: $OUTPUT_PATH"
+          echo "output_path=$OUTPUT_PATH" >> $GITHUB_OUTPUT
+          
+      # Step 6: Run Jest Tests with Coverage Validation
+      - name: 🧪 Run Tests with Coverage Check
+        run: |
+          echo "🧪 Running Jest tests with coverage..."
+          npm run test -- --coverage --watchAll=false --coverageReporters=text-summary --coverageReporters=json-summary
+          
+          # Parse coverage summary and validate >= 80%
+          echo "📊 Validating coverage requirements..."
+          node -e "
+            const coverage = require('./coverage/coverage-summary.json');
+            const total = coverage.total;
+            const statements = total.statements.pct;
+            const branches = total.branches.pct;
+            const functions = total.functions.pct;
+            const lines = total.lines.pct;
+            
+            console.log(\`📈 Coverage Summary:\`);
+            console.log(\`   Statements: \${statements}%\`);
+            console.log(\`   Branches: \${branches}%\`);
+            console.log(\`   Functions: \${functions}%\`);
+            console.log(\`   Lines: \${lines}%\`);
+            console.log(\`   Overall: \${statements}%\`);
+            
+            const minCoverage = 80;
+            if (statements < minCoverage || branches < minCoverage || functions < minCoverage || lines < minCoverage) {
+              console.error(\`❌ Coverage requirement failed! All metrics must be >= \${minCoverage}%\`);
+              process.exit(1);
+            } else {
+              console.log(\`✅ Coverage validation passed! All metrics >= \${minCoverage}%\`);
+            }
+          "
+          
+      # Step 7: Build Angular Project
+      - name: 🔨 Build Angular Project
+        run: |
+          echo "🔨 Building Angular project: ${{ steps.project-config.outputs.project_name }}"
+          npm run build -- --base-href '/ymldemo1/'
+          
+      # Step 8: Copy index.html to 404.html for SPA routing support
+      - name: 🔧 Configure SPA Routing
+        run: |
+          echo "🔧 Setting up SPA routing support..."
+          cp ${{ steps.project-config.outputs.output_path }}/index.html ${{ steps.project-config.outputs.output_path }}/404.html
+          echo "✅ Copied index.html to 404.html for SPA refresh support"
+          
+      # Step 9: Configure GitHub Pages
+      - name: ⚙️ Configure GitHub Pages
+        uses: actions/configure-pages@v4
+        
+      # Step 10: Upload Build Artifact
+      - name: 📤 Upload Pages Artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ${{ steps.project-config.outputs.output_path }}
+          
+      # Step 11: Deploy to GitHub Pages
+      - name: 🚀 Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+        
+      # Step 12: Print Deployment URL
+      - name: 🌐 Deployment Complete
+        run: |
+          echo "🎉 Deployment Successful!"
+          echo "📱 Your Angular app is now live at: ${{ steps.deployment.outputs.page_url }}"
+          echo "🔗 GitHub Pages URL: ${{ steps.deployment.outputs.page_url }}"
